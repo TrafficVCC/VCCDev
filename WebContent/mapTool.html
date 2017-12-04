@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>read road</title>
+    <!--加载百度地图API库-->
+    <script type="text/javascript" src="http://api.map.baidu.com/api?v=2.0&ak=YHKeHhFlknc84X3Xq0HmMQfainbDgegu"></script>
+    <script type="text/javascript" src="http://api.map.baidu.com/library/AreaRestriction/1.2/src/AreaRestriction_min.js"></script>
+    <script type="text/javascript" src="http://api.map.baidu.com/library/DistanceTool/1.2/src/DistanceTool_min.js"></script>
+    <!--加载鼠标绘制工具-->
+    <script type="text/javascript" src="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.js"></script>
+    <link rel="stylesheet" href="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.css" />
+
+    <script type="text/javascript" src="js/jquery-3.2.1.js"></script>
+    <link rel="stylesheet" href="./layui/css/layui.css"  media="all">
+
+    <style type="text/css">
+        html{height: 100%;}
+        body{height: 100%; margin: 0px; padding: 0px;}
+        #display{height: 90%; width: 20%; float: left;}
+        #map{height: 100%; width: 80%; float: left;}
+        #btn {display:block;bottom:0px;right:1px;right:18px;width:200px;line-height:30px;position:fixed;border:1px solid #fff;text-align:center;color:#fff;}
+        /*去除地图左下方baidu logo*/
+        .BMap_cpyCtrl {display: none;}
+        .anchorBL {display: none;}
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div id="display" style="overflow: auto;">
+		<!-- padding-left设置p元素左内边距，相当于将里面的元素向右移动 -->
+		<p id="wayname" style="margin:10px 5px 15px 20px; text-align:center; font-size:20px; font-family:verdana;">	
+			<!--<input type="text" name="title" required  lay-verify="required" placeholder="请输入路名" autocomplete="off" class="layui-input">-->
+		</p>
+		<p style="">
+			<ol id="list" style="padding-left: 20px"></ol>
+		</p>
+	</div>
+	<div id="btn" class="layui-btn-group">
+		<button class="layui-btn" onClick="onOpen()">开始</button>
+		<button class="layui-btn" onClick="onDist()">测距</button>
+		<button class="layui-btn" onClick="onSubmit()">提交</button>
+	</div>
+</body>
+  
+<script src="./layui/layui.js"></script>
+<script src="./layui/layui.all.js"></script>
+
+<script type="text/javascript">
+	
+	window.onload = function() {
+		var way = getUrlParam('way');
+		$("#wayname").html(way);
+	}
+	
+	//定义json数组存储道路数据
+	var road = {"way":"", "data":[]};
+	var overlays = [];
+	var m = new Map();	//polyline和ld的映射关系
+	var ld = 0;
+	
+	//创建地图
+	var map = new BMap.Map("map", {enableMapClick:false});
+	map.centerAndZoom("合肥",15);
+	map.enableScrollWheelZoom(true);     //开启鼠标滚轮缩放
+	
+	var polylineMenuItem = [
+		{
+			text:'编辑',
+			callback:function(e,ee,overlay){overlay.enableEditing();}
+		},
+		{
+			text:'完成',
+			callback:function(e,ee,overlay){
+				overlay.disableEditing();
+			}
+		},
+		{
+			text:'删除',
+			callback:function(e,ee,overlay){
+				var index = m.get(overlay);
+				//alert(index);
+				map.removeOverlay(overlay);
+				overlays.splice(index,1);	//删除overlays中指定索引项
+				$("ol li").remove();
+            	m.clear();
+            	for(var i=0; i<overlays.length; i++) {
+            		m.set(overlays[i], i);
+            	}
+			}
+		}
+	];
+	
+	var styleOptions = {
+		strokeColor:"red",    //边线颜色。
+		fillColor:"red",      //填充颜色。当参数为空时，圆形将没有填充效果。
+		strokeWeight: 6,       //边线的宽度，以像素为单位。
+		strokeOpacity: 0.8,	   //边线透明度，取值范围0 - 1。
+		fillOpacity: 0.6,      //填充的透明度，取值范围0 - 1。
+		strokeStyle: 'solid', //边线的样式，solid或dashed。
+		enableEditing: false
+	}
+	
+	//创建鼠标绘制工具
+	var myDrawingManagerObject = new BMapLib.DrawingManager(map, {
+		isOpen: false,
+		enableDrawingTool: true,
+		enableCalculate: false,
+		drawingToolOptions: {
+			anchor: BMAP_ANCHOR_TOP_LEFT,
+			offset: new BMap.Size(5, 5),
+			drawingModes : [
+				BMAP_DRAWING_POLYLINE
+			]
+		},
+		polylineOptions: styleOptions
+	});
+	
+	//绘制polyline完成后，派发的事件接口
+	myDrawingManagerObject.addEventListener("polylinecomplete", function(e,overlay) {
+	    overlays.push(overlay);
+		overlay.setStrokeColor("blue");
+		m.set(overlay,ld);
+		ld = ld + 1;
+		addPolylineEvent(overlay);
+	});
+	
+	//polyline鼠标右击事件,弹出菜单项
+	function addPolylineEvent(overlay) {
+		overlay.addEventListener("rightclick", function (e) {
+			var polylineMenu = new BMap.ContextMenu();
+			for(var i=0; i < polylineMenuItem.length; i++){
+				polylineMenu.addItem(new BMap.MenuItem(polylineMenuItem[i].text,polylineMenuItem[i].callback.bind(overlay)));
+			}
+			overlay.addContextMenu(polylineMenu);
+		});
+	}
+	
+	function onOpen() {
+		var way = getUrlParam('way');
+		// 创建地址解析器实例
+		var myGeo = new BMap.Geocoder();
+		// 将地址解析结果显示在地图上,并调整地图视野
+		myGeo.getPoint(way, function(point){
+			if (point) {
+				map.centerAndZoom(point, 16);
+				//map.addOverlay(new BMap.Marker(point));
+			}else{
+				alert("您选择地址没有解析到结果!");
+			}
+		}, "合肥市");	
+	}
+	
+	function onDist() {
+		//添加百度地图测距功能
+		var opts = {lineColor:"blue",lineStroke :5, opacity:0.8};
+		var myDis = new BMapLib.DistanceTool(map,opts);
+		myDis.open();
+	}
+	
+	function onSubmit () {
+		var name = $("#wayname").text();
+		road.way = name;
+		//alert(name);
+		for(var ld=0; ld<overlays.length; ld++) {
+			var obj = {"ld":ld, "points":overlays[ld].getPath()};
+			road.data.push(obj);
+		}
+		
+		//设置距离
+		var start = new BMap.Point(road.data[0].points[0].lng, road.data[0].points[0].lat);	//保存起点坐标
+		
+		for(var ld=0; ld<overlays.length; ld++) {
+			var points = road.data[ld].points;
+			for(var i=0; i<points.length; i++) {
+				var point = new BMap.Point(points[i].lng, points[i].lat);
+				points[i].dist = map.getDistance(point,start).toFixed(2);
+			}
+		}
+	
+		console.log(road);
+	
+		$.post("/RoadMap/MapServlet",
+			{
+				"data": JSON.stringify(road)
+			},
+			function(data, status) {
+				layer.msg('提交成功,正在返回...');
+				//alert(status);
+				setTimeout(function(){
+					history.go(-1);
+				}, 1000);
+			}
+		);	
+	}
+	
+	
+	//获取url中的参数
+	function getUrlParam(name) {
+		var reg = new RegExp("(^|&)" + name + "=([^&]*)(&|$)"); //构造一个含有目标参数的正则表达式对象
+		var r = window.location.search.substr(1).match(reg); //匹配目标参数
+		if(r != null) return decodeURI(r[2]); //decodeURI参数内容。
+		return null; //返回参数值
+	}   
+</script>
+</html>

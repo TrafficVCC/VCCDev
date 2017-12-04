@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>read road</title>
+    <!--加载百度地图API库-->
+    <script type="text/javascript" src="http://api.map.baidu.com/api?v=2.0&ak=YHKeHhFlknc84X3Xq0HmMQfainbDgegu"></script>
+    <script type="text/javascript" src="http://api.map.baidu.com/library/AreaRestriction/1.2/src/AreaRestriction_min.js"></script>
+    <script type="text/javascript" src="http://api.map.baidu.com/library/DistanceTool/1.2/src/DistanceTool_min.js"></script>
+    <!--加载鼠标绘制工具-->
+    <script type="text/javascript" src="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.js"></script>
+    <link rel="stylesheet" href="http://api.map.baidu.com/library/DrawingManager/1.4/src/DrawingManager_min.css" />
+
+    <script type="text/javascript" src="js/jquery-3.2.1.js"></script>
+    <link rel="stylesheet" href="./layui/css/layui.css"  media="all">
+
+    <style type="text/css">
+        html{height: 100%;}
+        body{height: 100%; margin: 0px; padding: 0px;}
+        #display{height: 90%; width: 20%; float: left;}
+        #map{height: 100%; width: 80%; float: left;}
+        #btn {display:block;bottom:0px;right:1px;right:18px;width:200px;line-height:30px;position:fixed;border:1px solid #fff;text-align:center;color:#fff;}
+        /*去除地图左下方baidu logo*/
+        .BMap_cpyCtrl {display: none;}
+        .anchorBL {display: none;}
+    </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<div id="display" class="layui-form">
+    <div class="layui-input-block" style="margin:10px 10px 15px 20px;">
+        <select id="roadname" multiple="multiple">
+            <option value="">请选择道路</option>
+           
+        </select>
+    </div>
+</div>
+
+<div id="btn" class="layui-btn-group">
+    <button class="layui-btn" onclick="onRead();">载入</button>
+    <button class="layui-btn" onclick="onAdd();">添加</button>
+    <button class="layui-btn" onclick="onSave();">保存</button>
+</div>
+</body>
+
+<script src="./layui/layui.js"></script>
+<script src="./layui/layui.all.js"></script>
+<script type="text/javascript">
+    layui.use('form', function(){
+        var form = layui.form;
+		window.onload = function() {
+		 	$.post("/RoadMap/LoadRoadServlet",
+                {
+                    "data": "way"
+                },
+                function(data, status) {
+                   // alert(status);
+                    data = eval('(' + data + ')');
+                  	updateWay(data);
+                }
+       		);
+        }
+		
+		function updateWay(data) {
+			//$("#roadname option[value='add']").remove();
+			for(var i=0; i<data.length; i++) {
+				console.log(data[i].way);
+				$("#roadname").append("<option value='"+i+"'>"+data[i].way+"</option>");
+			}
+			//$("#roadname").append("<option value='add'>添加道路+</option>");
+    	 	form.render('select');  //刷新select选择框渲染
+    	 	//alert("添加成功"); 	
+    	}
+		
+        //各种基于事件的操作，下面会有进一步介绍
+    });
+	
+  //定义json数组存储道路数据
+	var road = {"way":"", "data":[]};
+	var dataset = [];
+	var m = new Map();	//polyline和ld的映射关系
+	
+	var modify = false;
+    
+    //创建地图
+    var map = new BMap.Map("map", {enableMapClick:false});
+    map.centerAndZoom("合肥",15);
+    map.enableScrollWheelZoom(true);     //开启鼠标滚轮缩放
+	
+    //右键菜单项
+    var polylineMenuItem = [
+        {
+            text:'修改',
+            callback:function(e,ee,overlay){overlay.enableEditing(); modify=true;}
+        },
+        {
+            text:'完成',
+            callback:function(e,ee,overlay){overlay.disableEditing(); modify=true;}
+        },
+        {
+            text:'删除',
+            callback:function(e,ee,overlay){
+            	modify=true;
+            	var index = m.get(overlay);
+				map.removeOverlay(overlay);
+            	dataset.splice(index,1);	//删除overlays中指定索引项
+            	m.clear();
+            	for(var i=0; i<dataset.length; i++) {
+            		m.set(dataset[i], i);
+            	}
+             }
+        }
+    ];
+    
+	//添加polyline鼠标右击事件,弹出菜单项
+	function addPolylineEvent(overlay) {
+		overlay.addEventListener("rightclick", function (e) {
+			var polylineMenu = new BMap.ContextMenu();
+			for(var i=0; i < polylineMenuItem.length; i++){
+				polylineMenu.addItem(new BMap.MenuItem(polylineMenuItem[i].text,polylineMenuItem[i].callback.bind(overlay)));
+			}
+			overlay.addContextMenu(polylineMenu);
+		});
+	}
+
+ 	function onAdd() {
+ 		//prompt层
+		layer.prompt({title: '输入路名，并确认', formType: 3}, function(pass, index){
+  			layer.close(index);
+  			var flag,str;
+  			if(isExistOption(pass)) {
+  				str = pass+'已存在,正在为您加载...';
+  				flag = true;
+  			}
+  			else {
+  				str = '即将开始添加！您的路名：'+ pass;
+  				flag = false;
+  			}
+  			
+  			layer.msg(str);	
+  			//加载层-风格4
+  			layer.msg(str, {
+  			  icon: 16
+  			  ,shade: 0.01
+  			});
+  			setTimeout(function(){
+  				layer.closeAll('loading');
+  			    if(flag == true) {
+  					// 创建地址解析器实例
+  					var myGeo = new BMap.Geocoder();
+  					// 将地址解析结果显示在地图上,并调整地图视野
+  					myGeo.getPoint(pass, function(point){
+  						if (point) {
+  							map.centerAndZoom(point, 16);
+  							//map.addOverlay(new BMap.Marker(point));
+  						}else{
+  							alert("您选择地址没有解析到结果!");
+  						}
+  					}, "合肥市");	
+  				
+  			  	$.post("/RoadMap/LoadRoadServlet",
+  	                {
+  	                    "data": pass
+  	                },
+  	                function(data, status) {
+  	                    //alert(status);
+  	                    data = eval('(' + data + ')');
+  	                    //alert(data);
+  	                    
+  	                    layer.msg("加载成功");
+  	                    drawPolyline(data);
+  	                }
+  	        	);
+  			}
+  			else {
+  				var parm = "way="+encodeURI(pass);   //encodeURI解决中文乱码，获取参数时还需decodeURI
+  		    	setTimeout("window.location.href='mapTool.html?"+parm+"'",0);	
+  			}
+  			}, 1000);
+		});
+    }
+    
+    //判断某option元素是否存在
+ 	function isExistOption(text) {  
+ 	    var isExist = false;  
+ 	    var count = $('#roadname option').length;   
+
+ 	    for(var i=0;i<count;i++)     
+ 	    {   
+ 	    	if($('#roadname option:eq('+i+')').text() == text)     
+ 	        {     
+ 	        	isExist = true;     
+ 	            break;     
+ 	        }     
+ 	    }     
+ 	    return isExist;  
+ 	}  
+
+    function onRead() {
+        var options=$("#roadname option:selected");  //获取选中的项
+        if(options.text()=='') {
+        	layer.msg('请选择道路');
+        	return;
+        }
+        map.clearOverlays();
+        //alert(options.text());
+        
+     	// 创建地址解析器实例
+		var myGeo = new BMap.Geocoder();
+		// 将地址解析结果显示在地图上,并调整地图视野
+		myGeo.getPoint(options.text(), function(point){
+			if (point) {
+				map.centerAndZoom(point, 16);
+				//map.addOverlay(new BMap.Marker(point));
+			}else{
+				alert("您选择地址没有解析到结果!");
+			}
+		}, "合肥市");	
+
+        $.post("/RoadMap/LoadRoadServlet",
+                {
+                    "data": options.text()
+                },
+                function(data, status) {
+                    //alert(status);
+                    data = eval('(' + data + ')');
+                   
+                    //加载层-风格4
+					layer.msg('加载中', {
+  						icon: 16
+  						,shade: 0.01
+					});
+					setTimeout(function(){
+						layer.closeAll('loading');
+						layer.msg("加载成功");
+						drawPolyline(data);
+					}, 1000);
+                }
+        );
+    }
+    
+    function drawPolyline(data) {
+    	var overlays = [];
+        var points = [];
+        var ld = 0;
+        for(var i=0; i<data.length; i++) {
+        	if(data[i].ld == ld) {
+        		var p = new BMap.Point(data[i].lng, data[i].lat);
+                points.push(p);	
+        	}
+        	else {
+        		overlays.push(points);
+        		points = [];
+        		var p = new BMap.Point(data[i].lng, data[i].lat);
+                points.push(p);
+        		ld = ld + 1;
+        	}
+        }
+        overlays.push(points);
+        console.log(overlays)
+
+        var styleOptions = {
+            strokeColor:"red",    //边线颜色。
+            fillColor:"red",      //填充颜色。当参数为空时，圆形将没有填充效果。
+            strokeWeight: 6,       //边线的宽度，以像素为单位。
+            strokeOpacity: 0.8,	   //边线透明度，取值范围0 - 1。
+            fillOpacity: 0.6,      //填充的透明度，取值范围0 - 1。
+            strokeStyle: 'solid', //边线的样式，solid或dashed。
+            enableEditing: false
+        }
+        for(var i=0; i<overlays.length; i++) {
+        	var polyline = new BMap.Polyline(overlays[i], styleOptions);
+            map.addOverlay(polyline);
+            
+            dataset.push(polyline);
+            m.set(polyline,i);
+            addPolylineEvent(polyline);
+        }
+    }
+    
+    //保存修改，提交到数据库
+    function onSave() {
+    	
+    	if(modify==false) {
+    		layer.msg("没有任何修改");
+    		return;
+    	}
+    	
+    	var name = $("#roadname option:selected").text();
+		road.way = name;
+		//alert(name);
+		
+		layer.msg('确定保存修改吗？', {
+  			time: 0 //不自动关闭
+  			,btn: ['确定', '取消']
+  			,yes: function(index){
+    			layer.close(index);
+    			   //加载层-风格4
+				layer.msg('正在保存...', {
+						icon: 16
+						,shade: 0.01
+				});
+    			
+    			//执行删除操作时
+				if(dataset.length == 0) {
+					$.post("/RoadMap/MapServlet",
+							{
+								"data": JSON.stringify(road)
+							},
+							function(data, status) {
+								//alert(status);
+								$("#roadname option[text='"+name+"']").remove();
+								setTimeout(function(){
+									layer.closeAll('loading');
+									layer.msg('保存成功', {icon: 1});
+									setTimeout(function(){
+										location.reload();	//刷新页面
+									}, 1000);
+								}, 1000);
+							}
+						);	
+					return;
+				}
+				
+				for(var ld=0; ld<dataset.length; ld++) {
+					var obj = {"ld":ld, "points":dataset[ld].getPath()};
+					road.data.push(obj);
+				}
+				
+				//设置距离
+				var start = new BMap.Point(road.data[0].points[0].lng, road.data[0].points[0].lat);	//保存起点坐标
+				
+				for(var ld=0; ld<dataset.length; ld++) {
+					var points = road.data[ld].points;
+					for(var i=0; i<points.length; i++) {
+						var point = new BMap.Point(points[i].lng, points[i].lat);
+						points[i].dist = map.getDistance(point,start).toFixed(2);
+					}
+				}
+			
+				console.log(road);
+			
+				$.post("/RoadMap/MapServlet",
+					{
+						"data": JSON.stringify(road)
+					},
+					function(data, status) {
+						//alert(status);
+						setTimeout(function(){
+							layer.closeAll('loading');
+							layer.msg('保存成功', {icon: 1});
+							setTimeout(function(){
+								location.reload();	//刷新页面
+							}, 1000);
+						}, 1000);
+					}
+				);	
+  			}
+		});
+		
+    }
+
+</script>
+</html>
